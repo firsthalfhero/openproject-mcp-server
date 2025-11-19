@@ -518,8 +518,21 @@ async def update_work_package(
                 "error": "Work package ID must be a positive integer"
             })
         
+        # First, fetch the current work package to get the lockVersion
+        # This is required by OpenProject's optimistic locking mechanism
+        current_wp = await openproject_client.get_work_package_by_id(work_package_id)
+        lock_version = current_wp.get("lockVersion")
+        
+        if lock_version is None:
+            return json.dumps({
+                "success": False,
+                "error": "Unable to retrieve lock version for work package. It may not exist."
+            })
+        
         # Build update payload with only provided fields
-        updates = {}
+        updates = {
+            "lockVersion": lock_version  # Required for optimistic locking
+        }
         
         if subject:
             updates["subject"] = subject.strip()
@@ -550,7 +563,8 @@ async def update_work_package(
         if estimated_hours:
             updates["estimatedTime"] = f"PT{estimated_hours}H"
         
-        if not updates:
+        # Check if any actual updates were provided (besides lockVersion)
+        if len(updates) == 1:
             return json.dumps({
                 "success": False,
                 "error": "No updates provided. Specify at least one field to update."
@@ -670,8 +684,19 @@ async def assign_work_package_by_email(work_package_id: int, assignee_email: str
                 "error": f"User with email '{assignee_email}' not found"
             })
         
-        # Update work package with assignee
+        # First, fetch the current work package to get the lockVersion
+        current_wp = await openproject_client.get_work_package_by_id(work_package_id)
+        lock_version = current_wp.get("lockVersion")
+        
+        if lock_version is None:
+            return json.dumps({
+                "success": False,
+                "error": "Unable to retrieve lock version for work package"
+            })
+        
+        # Update work package with assignee and lockVersion
         updates = {
+            "lockVersion": lock_version,
             "_links": {
                 "assignee": {
                     "href": f"/api/v3/users/{user.get('id')}"
