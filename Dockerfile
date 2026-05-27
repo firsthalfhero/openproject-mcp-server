@@ -49,17 +49,11 @@ RUN mkdir -p /app/logs /app/data && \
 USER mcp
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python3 -c "import asyncio; import sys; sys.path.insert(0, '/app/src'); from openproject_client import OpenProjectClient; \
-    async def check(): \
-        client = OpenProjectClient(); \
-        result = await client.test_connection(); \
-        await client.close(); \
-        exit(0 if result['success'] else 1); \
-    asyncio.run(check())" || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD python3 /app/scripts/healthcheck.py
 
-# Expose ports for MCP and status endpoints
-EXPOSE 8080 8081
+# Expose ports for MCP SSE server and HTTP status server
+EXPOSE 39127 8081
 
 # Default command - run HTTP server with status endpoints
 CMD ["python3", "scripts/run_http_server_with_status.py"]
