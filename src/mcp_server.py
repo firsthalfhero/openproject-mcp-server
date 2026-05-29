@@ -1,7 +1,7 @@
 """FastMCP server for OpenProject integration."""
 import asyncio
 import json
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Union
 from fastmcp import FastMCP
 from openproject_client import OpenProjectClient, OpenProjectAPIError
 from models import ProjectCreateRequest, WorkPackageCreateRequest, WorkPackageRelationCreateRequest
@@ -420,6 +420,57 @@ async def get_projects() -> str:
             "success": True,
             "message": f"Found {len(project_list)} projects",
             "projects": project_list
+        }, indent=2)
+        
+    except OpenProjectAPIError as e:
+        return json.dumps({
+            "success": False,
+            "error": f"OpenProject API error: {e.message}",
+            "details": e.response_data
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({
+            "success": False,
+            "error": f"Unexpected error: {str(e)}"
+        }, indent=2)
+
+
+@app.tool()
+async def get_project(project_id: Union[int, str]) -> str:
+    """Get a specific project by ID or identifier, including all attributes.
+    
+    Args:
+        project_id: ID (integer) or identifier (string) of the project
+    
+    Returns:
+        JSON string with project details
+    """
+    try:
+        project = await openproject_client.get_project(project_id)
+        
+        # Format project details for response
+        project_data = {
+            "id": project.get("id"),
+            "name": project.get("name"),
+            "identifier": project.get("identifier"),
+            "description": project.get("description", {}).get("raw", ""),
+            "status": project.get("status"),
+            "active": project.get("active"),
+            "public": project.get("public"),
+            "created_at": project.get("createdAt"),
+            "updated_at": project.get("updatedAt"),
+            "url": f"{settings.openproject_url}/projects/{project.get('identifier', project.get('id'))}"
+        }
+        
+        # Include custom fields and other attributes (those not starting with _)
+        for key, value in project.items():
+            if not key.startswith("_") and key not in project_data:
+                project_data[key] = value
+                
+        return json.dumps({
+            "success": True,
+            "message": f"Project '{project_data['name']}' retrieved successfully",
+            "project": project_data
         }, indent=2)
         
     except OpenProjectAPIError as e:

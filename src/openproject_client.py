@@ -1,7 +1,7 @@
 """OpenProject API client for MCP server."""
 import json
 import base64
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Union
 from datetime import datetime, timedelta
 import httpx
 from config import settings
@@ -130,6 +130,10 @@ class OpenProjectClient:
             return await self.get_paginated_results("/projects")
         response = await self._make_request("GET", "/projects")
         return response.get("_embedded", {}).get("elements", [])
+    
+    async def get_project(self, project_id: Union[int, str]) -> Dict[str, Any]:
+        """Get a specific project by ID or identifier."""
+        return await self._make_request("GET", f"/projects/{project_id}")
     
     async def create_project(self, project_data: ProjectCreateRequest) -> Dict[str, Any]:
         """Create a new project."""
