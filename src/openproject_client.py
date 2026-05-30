@@ -1,11 +1,11 @@
 """OpenProject API client for MCP server."""
 import json
 import base64
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Union
 from datetime import datetime, timedelta
 import httpx
 from config import settings
-from models import Project, WorkPackage, ProjectCreateRequest, WorkPackageCreateRequest
+from models import Project, WorkPackage, ProjectCreateRequest, WorkPackageCreateRequest, CommentCreateRequest, ReactionToggleRequest
 from utils.logging import get_logger, log_api_request, log_api_response, log_error
 
 logger = get_logger(__name__)
@@ -130,6 +130,10 @@ class OpenProjectClient:
             return await self.get_paginated_results("/projects")
         response = await self._make_request("GET", "/projects")
         return response.get("_embedded", {}).get("elements", [])
+    
+    async def get_project(self, project_id: Union[int, str]) -> Dict[str, Any]:
+        """Get a specific project by ID or identifier."""
+        return await self._make_request("GET", f"/projects/{project_id}")
     
     async def create_project(self, project_data: ProjectCreateRequest) -> Dict[str, Any]:
         """Create a new project."""
@@ -331,6 +335,36 @@ class OpenProjectClient:
         """Get a specific work package by ID."""
         url = f"/work_packages/{work_package_id}"
         return await self._make_request("GET", url)
+
+    async def get_work_package_activities(self, work_package_id: int, offset: int = 1, page_size: int = 20) -> List[Dict[str, Any]]:
+        """Get activities (including comments) for a work package."""
+        params = {
+            "offset": offset,
+            "pageSize": page_size
+        }
+        response = await self._make_request("GET", f"/work_packages/{work_package_id}/activities", params=params)
+        return response.get("_embedded", {}).get("elements", [])
+
+    async def create_work_package_comment(self, work_package_id: int, comment_data: CommentCreateRequest, notify: bool = True) -> Dict[str, Any]:
+        """Add a comment to a work package."""
+        url = f"/work_packages/{work_package_id}/activities"
+        if not notify:
+            url += "?notify=false"
+            
+        payload = {
+            "comment": {
+                "raw": comment_data.comment
+            },
+            "internal": comment_data.internal
+        }
+        return await self._make_request("POST", url, json=payload)
+
+    async def toggle_reaction(self, activity_id: int, reaction_data: ReactionToggleRequest) -> Dict[str, Any]:
+        """Toggle an emoji reaction on an activity."""
+        payload = {
+            "reaction": reaction_data.reaction
+        }
+        return await self._make_request("PATCH", f"/activities/{activity_id}/emoji_reactions", json=payload)
     
     async def test_connection(self) -> Dict[str, Any]:
         """Test connection to OpenProject API."""
@@ -418,6 +452,15 @@ class OpenProjectClient:
         url = f"/projects/{project_id}/memberships"
         response = await self._make_request("GET", url)
         return response.get("_embedded", {}).get("elements", [])
+
+    async def get_project_schema(self, use_cache: bool = True) -> Dict[str, Any]:
+        """Get the schema for projects, defining custom attributes."""
+        if use_cache:
+            return await self.get_cached_or_fetch(
+                "project_schema",
+                lambda: self._make_request("GET", "/projects/schema")
+            )
+        return await self._make_request("GET", "/projects/schema")
 
     async def get_cached_or_fetch(self, cache_key: str, fetch_func):
         """Get cached result or fetch fresh data."""

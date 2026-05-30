@@ -286,7 +286,7 @@ class TestOpenProjectIntegration:
     @pytest.mark.asyncio
     async def test_api_error_handling(self):
         """Test OpenProject API error handling in integration workflow."""
-        from src.openproject_client import OpenProjectAPIError
+        from src.mcp_server import OpenProjectAPIError
         
         with patch.object(openproject_client, 'get_users', new_callable=AsyncMock) as mock_get_users:
             # Mock API error
