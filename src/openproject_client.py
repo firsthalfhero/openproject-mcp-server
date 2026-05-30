@@ -5,7 +5,7 @@ from typing import Dict, List, Any, Optional, Union
 from datetime import datetime, timedelta
 import httpx
 from config import settings
-from models import Project, WorkPackage, ProjectCreateRequest, WorkPackageCreateRequest
+from models import Project, WorkPackage, ProjectCreateRequest, WorkPackageCreateRequest, CommentCreateRequest, ReactionToggleRequest
 from utils.logging import get_logger, log_api_request, log_api_response, log_error
 
 logger = get_logger(__name__)
@@ -335,6 +335,36 @@ class OpenProjectClient:
         """Get a specific work package by ID."""
         url = f"/work_packages/{work_package_id}"
         return await self._make_request("GET", url)
+
+    async def get_work_package_activities(self, work_package_id: int, offset: int = 1, page_size: int = 20) -> List[Dict[str, Any]]:
+        """Get activities (including comments) for a work package."""
+        params = {
+            "offset": offset,
+            "pageSize": page_size
+        }
+        response = await self._make_request("GET", f"/work_packages/{work_package_id}/activities", params=params)
+        return response.get("_embedded", {}).get("elements", [])
+
+    async def create_work_package_comment(self, work_package_id: int, comment_data: CommentCreateRequest, notify: bool = True) -> Dict[str, Any]:
+        """Add a comment to a work package."""
+        url = f"/work_packages/{work_package_id}/activities"
+        if not notify:
+            url += "?notify=false"
+            
+        payload = {
+            "comment": {
+                "raw": comment_data.comment
+            },
+            "internal": comment_data.internal
+        }
+        return await self._make_request("POST", url, json=payload)
+
+    async def toggle_reaction(self, activity_id: int, reaction_data: ReactionToggleRequest) -> Dict[str, Any]:
+        """Toggle an emoji reaction on an activity."""
+        payload = {
+            "reaction": reaction_data.reaction
+        }
+        return await self._make_request("PATCH", f"/activities/{activity_id}/emoji_reactions", json=payload)
     
     async def test_connection(self) -> Dict[str, Any]:
         """Test connection to OpenProject API."""

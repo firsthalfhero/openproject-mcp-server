@@ -4,7 +4,7 @@ import json
 from typing import Dict, Any, Optional, Union
 from fastmcp import FastMCP
 from openproject_client import OpenProjectClient, OpenProjectAPIError
-from models import ProjectCreateRequest, WorkPackageCreateRequest, WorkPackageRelationCreateRequest
+from models import ProjectCreateRequest, WorkPackageCreateRequest, WorkPackageRelationCreateRequest, CommentCreateRequest, ReactionToggleRequest
 from pydantic import ValidationError
 from config import settings
 from handlers.resources import ResourceHandler
@@ -1034,6 +1034,169 @@ async def get_work_package_statuses() -> str:
             "statuses": status_list
         }, indent=2)
         
+    except OpenProjectAPIError as e:
+        return json.dumps({
+            "success": False,
+            "error": f"OpenProject API error: {e.message}",
+            "details": e.response_data
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({
+            "success": False,
+            "error": f"Unexpected error: {str(e)}"
+        }, indent=2)
+
+
+@app.tool()
+async def get_work_package_activities(work_package_id: int, offset: int = 1, page_size: int = 20) -> str:
+    """Get activities (including comments) for a specific work package.
+    
+    Args:
+        work_package_id: ID of the work package
+        offset: Page number to retrieve (default: 1)
+        page_size: Number of elements per page (default: 20)
+    
+    Returns:
+        JSON string with list of activities
+    """
+    try:
+        if work_package_id <= 0:
+            return json.dumps({
+                "success": False,
+                "error": "Work package ID must be a positive integer"
+            })
+            
+        activities = await openproject_client.get_work_package_activities(work_package_id, offset, page_size)
+        
+        activity_list = []
+        for activity in activities:
+            # Only include activities with comments if needed, or all activities
+            activity_data = {
+                "id": activity.get("id"),
+                "version": activity.get("version"),
+                "comment": activity.get("comment", {}).get("raw", ""),
+                "author": activity.get("_links", {}).get("author", {}).get("title", "Unknown"),
+                "created_at": activity.get("createdAt"),
+                "updated_at": activity.get("updatedAt"),
+                "reactions": []
+            }
+            
+            # Add emoji reactions if present
+            emoji_reactions = activity.get("_embedded", {}).get("emojiReactions", [])
+            for reaction in emoji_reactions:
+                activity_data["reactions"].append({
+                    "emoji": reaction.get("emoji"),
+                    "count": reaction.get("count"),
+                    "reacting_users": [u.get("title") for u in reaction.get("_links", {}).get("reactingUsers", [])]
+                })
+                
+            activity_list.append(activity_data)
+            
+        return json.dumps({
+            "success": True,
+            "message": f"Retrieved {len(activity_list)} activities for work package {work_package_id}",
+            "activities": activity_list
+        }, indent=2)
+        
+    except OpenProjectAPIError as e:
+        return json.dumps({
+            "success": False,
+            "error": f"OpenProject API error: {e.message}",
+            "details": e.response_data
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({
+            "success": False,
+            "error": f"Unexpected error: {str(e)}"
+        }, indent=2)
+
+
+@app.tool()
+async def create_work_package_comment(work_package_id: int, comment: str, internal: bool = False, notify: bool = True) -> str:
+    """Add a comment to a work package.
+    
+    Args:
+        work_package_id: ID of the work package
+        comment: Comment text in markdown format
+        internal: Whether the comment is only visible internally (default: False)
+        notify: Whether to notify project members (default: True)
+    
+    Returns:
+        JSON string with the created activity
+    """
+    try:
+        if work_package_id <= 0:
+            return json.dumps({
+                "success": False,
+                "error": "Work package ID must be a positive integer"
+            })
+            
+        comment_data = CommentCreateRequest(comment=comment, internal=internal)
+        result = await openproject_client.create_work_package_comment(work_package_id, comment_data, notify)
+        
+        return json.dumps({
+            "success": True,
+            "message": f"Comment added to work package {work_package_id}",
+            "activity": {
+                "id": result.get("id"),
+                "comment": result.get("comment", {}).get("raw", ""),
+                "created_at": result.get("createdAt")
+            }
+        }, indent=2)
+        
+    except ValidationError as e:
+        return json.dumps({
+            "success": False,
+            "error": f"Validation error: {str(e)}"
+        }, indent=2)
+    except OpenProjectAPIError as e:
+        return json.dumps({
+            "success": False,
+            "error": f"OpenProject API error: {e.message}",
+            "details": e.response_data
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({
+            "success": False,
+            "error": f"Unexpected error: {str(e)}"
+        }, indent=2)
+
+
+@app.tool()
+async def toggle_reaction(activity_id: int, reaction: str) -> str:
+    """Toggle an emoji reaction on an activity (comment or update).
+    
+    If the user has already reacted with the specified emoji, it is removed.
+    Otherwise, it is added.
+    
+    Args:
+        activity_id: ID of the activity
+        reaction: Reaction identifier (e.g., thumbs_up, heart, rocket, eyes, confused_face)
+    
+    Returns:
+        JSON string with the updated reactions
+    """
+    try:
+        if activity_id <= 0:
+            return json.dumps({
+                "success": False,
+                "error": "Activity ID must be a positive integer"
+            })
+            
+        reaction_data = ReactionToggleRequest(reaction=reaction)
+        result = await openproject_client.toggle_reaction(activity_id, reaction_data)
+        
+        return json.dumps({
+            "success": True,
+            "message": f"Reaction '{reaction}' toggled on activity {activity_id}",
+            "reactions": result.get("_embedded", {}).get("elements", [])
+        }, indent=2)
+        
+    except ValidationError as e:
+        return json.dumps({
+            "success": False,
+            "error": f"Validation error: {str(e)}"
+        }, indent=2)
     except OpenProjectAPIError as e:
         return json.dumps({
             "success": False,

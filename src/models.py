@@ -137,3 +137,14 @@ class WorkPackageRelationCreateRequest(BaseModel):
         return v
 
 
+class CommentCreateRequest(BaseModel):
+    """Request model for creating a work package comment."""
+    comment: str = Field(..., min_length=1, description="Comment text in markdown format")
+    internal: bool = Field(default=False, description="Whether the comment is only visible internally")
+
+
+class ReactionToggleRequest(BaseModel):
+    """Request model for toggling an emoji reaction on an activity."""
+    reaction: str = Field(..., description="Reaction emoji identifier (e.g., thumbs_up, heart)")
+
+
