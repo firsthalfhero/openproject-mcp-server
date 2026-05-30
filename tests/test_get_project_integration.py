@@ -9,7 +9,7 @@ class TestGetProject:
 
     @pytest.mark.asyncio
     async def test_get_project_success(self):
-        """Test successful project retrieval."""
+        """Test successful project retrieval with enriched attributes."""
         mock_project = {
             "id": 1,
             "name": "Test Project",
@@ -24,8 +24,20 @@ class TestGetProject:
             "_links": {"self": {"href": "/api/v3/projects/1"}}
         }
         
-        with patch.object(openproject_client, 'get_project', new_callable=AsyncMock) as mock_get_project:
+        mock_schema = {
+            "customField1": {
+                "type": "String",
+                "name": "WorkDirectory",
+                "required": False,
+                "writable": True
+            }
+        }
+        
+        with patch.object(openproject_client, 'get_project', new_callable=AsyncMock) as mock_get_project, \
+             patch.object(openproject_client, 'get_project_schema', new_callable=AsyncMock) as mock_get_schema:
+            
             mock_get_project.return_value = mock_project
+            mock_get_schema.return_value = mock_schema
             
             # Test with ID
             result = await get_project(1)
@@ -33,8 +45,13 @@ class TestGetProject:
             
             assert result_data["success"] is True
             assert result_data["project"]["id"] == 1
-            assert result_data["project"]["name"] == "Test Project"
-            assert result_data["project"]["customField1"] == "Custom Value"
+            assert len(result_data["project"]["attributes"]) == 1
+            
+            attr = result_data["project"]["attributes"][0]
+            assert attr["key"] == "customField1"
+            assert attr["name"] == "WorkDirectory"
+            assert attr["value"] == "Custom Value"
+            assert attr["type"] == "String"
             assert "url" in result_data["project"]
             
             # Test with identifier

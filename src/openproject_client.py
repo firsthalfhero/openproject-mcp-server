@@ -423,6 +423,15 @@ class OpenProjectClient:
         response = await self._make_request("GET", url)
         return response.get("_embedded", {}).get("elements", [])
 
+    async def get_project_schema(self, use_cache: bool = True) -> Dict[str, Any]:
+        """Get the schema for projects, defining custom attributes."""
+        if use_cache:
+            return await self.get_cached_or_fetch(
+                "project_schema",
+                lambda: self._make_request("GET", "/projects/schema")
+            )
+        return await self._make_request("GET", "/projects/schema")
+
     async def get_cached_or_fetch(self, cache_key: str, fetch_func):
         """Get cached result or fetch fresh data."""
         now = datetime.now()

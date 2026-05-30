@@ -98,10 +98,16 @@ class StatusHandler(BaseHTTPRequestHandler):
             "mcp_tools": [
                 "health_check",
                 "create_project",
+                "get_project",
+                "get_projects",
                 "create_work_package", 
                 "create_work_package_dependency",
-                "get_projects",
-                "get_work_packages"
+                "get_work_packages",
+                "get_work_package_relations",
+                "get_work_package_types",
+                "get_work_package_statuses",
+                "get_priorities",
+                "get_project_members"
             ],
             "ports": {
                 "mcp_sse": 39127,

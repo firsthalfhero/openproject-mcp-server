@@ -459,12 +459,37 @@ async def get_project(project_id: Union[int, str]) -> str:
             "public": project.get("public"),
             "created_at": project.get("createdAt"),
             "updated_at": project.get("updatedAt"),
-            "url": f"{settings.openproject_url}/projects/{project.get('identifier', project.get('id'))}"
+            "url": f"{settings.openproject_url}/projects/{project.get('identifier', project.get('id'))}",
+            "attributes": []
         }
         
-        # Include custom fields and other attributes (those not starting with _)
+        # Check for custom attributes and fetch schema if needed
+        custom_field_keys = [k for k in project.keys() if k.startswith("customField")]
+        schema = {}
+        if custom_field_keys:
+            schema = await openproject_client.get_project_schema()
+        
+        # Process all attributes
         for key, value in project.items():
-            if not key.startswith("_") and key not in project_data:
+            # Skip internal HAL keys starting with _
+            if key.startswith("_"):
+                continue
+                
+            # If it's a custom field, enrich with schema info
+            if key.startswith("customField"):
+                attr_definition = schema.get(key, {})
+                enriched_attr = {
+                    "key": key,
+                    "value": value
+                }
+                # Merge schema definition (name, type, etc.)
+                for s_key, s_value in attr_definition.items():
+                    if s_key != "options": # Simplify options if needed, or keep all
+                        enriched_attr[s_key] = s_value
+                
+                project_data["attributes"].append(enriched_attr)
+            elif key not in project_data and key != "createdAt" and key != "updatedAt":
+                # Add other non-standard attributes directly to project_data
                 project_data[key] = value
                 
         return json.dumps({
