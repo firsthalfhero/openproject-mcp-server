@@ -1,10 +1,75 @@
 """Validation utilities for OpenProject MCP Server."""
 from typing import Any
 import re
+import unicodedata
 from datetime import datetime
 import structlog
 
 logger = structlog.get_logger()
+
+
+# Allowed OpenProject project status codes (used for _links.status.href).
+VALID_PROJECT_STATUSES = {
+    "on_track",
+    "off_track",
+    "at_risk",
+    "not_started",
+    "finished",
+    "discontinued",
+}
+
+# German umlaut / eszett transliterations applied before slugifying.
+_TRANSLITERATIONS = {
+    "ä": "ae", "ö": "oe", "ü": "ue", "ß": "ss",
+    "Ä": "ae", "Ö": "oe", "Ü": "ue",
+}
+
+
+def validate_project_status(status: str) -> None:
+    """Validate a project status code against the allowed OpenProject set.
+
+    Args:
+        status: Project status code (e.g. "finished")
+
+    Raises:
+        ValueError: If the status is not one of VALID_PROJECT_STATUSES
+    """
+    if status not in VALID_PROJECT_STATUSES:
+        allowed = ", ".join(sorted(VALID_PROJECT_STATUSES))
+        raise ValueError(f"Invalid status '{status}'. Must be one of: {allowed}")
+
+
+def generate_identifier(name: str) -> str:
+    """Derive a URL-safe OpenProject project identifier from a name.
+
+    Rules: German umlaut transliteration (ä->ae, ö->oe, ü->ue, ß->ss), then
+    NFKD-strip remaining accents, lowercase, keep [a-z0-9_], replace every
+    other character (incl. '&' and whitespace) with '-', collapse repeated
+    '-', and trim leading/trailing '-'. Falls back to "project" if empty.
+
+    Examples:
+        "B&R" -> "b-r", "FH " -> "fh",
+        "Jenoptik_WeMatch" -> "jenoptik_wematch", "COLOP KG" -> "colop-kg"
+    """
+    text = name or ""
+
+    # Explicit German transliteration before unicode normalization.
+    for src, dst in _TRANSLITERATIONS.items():
+        text = text.replace(src, dst)
+
+    # Strip remaining accents (é -> e, etc.).
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+
+    text = text.lower()
+
+    # Replace any disallowed character with '-'. Allowed: a-z, 0-9, '_'.
+    text = re.sub(r"[^a-z0-9_]+", "-", text)
+
+    # Collapse repeated '-' and trim from the ends.
+    text = re.sub(r"-{2,}", "-", text).strip("-")
+
+    return text or "project"
 
 
 def validate_work_package_data(project_id: int, subject: str) -> None:

@@ -4,11 +4,12 @@ import json
 from typing import Dict, Any, Optional
 from fastmcp import FastMCP
 from openproject_client import OpenProjectClient, OpenProjectAPIError
-from models import ProjectCreateRequest, WorkPackageCreateRequest, WorkPackageRelationCreateRequest
+from models import ProjectCreateRequest, ProjectUpdateRequest, WorkPackageCreateRequest, WorkPackageRelationCreateRequest
 from pydantic import ValidationError
 from config import settings
 from handlers.resources import ResourceHandler
 from utils.logging import get_logger, log_tool_execution, log_error
+from utils.validation import generate_identifier, validate_project_status
 
 logger = get_logger(__name__)
 
@@ -21,6 +22,34 @@ app = FastMCP("OpenProject MCP Server")
 # Initialize OpenProject client and resource handler
 openproject_client = OpenProjectClient()
 resource_handler = ResourceHandler(openproject_client)
+
+
+def _format_api_error(e: OpenProjectAPIError) -> dict:
+    """Build a consistent error payload, with a clear hint on 403 permissions."""
+    error_message = f"OpenProject API error: {e.message}"
+    if e.status_code == 403:
+        error_message = (
+            f"Permission denied (403): {e.message}. Creating a subproject requires "
+            f"the 'add_subprojects' permission on the parent project, or global "
+            f"project-creation rights. Setting a status requires edit rights on the project."
+        )
+    return {
+        "success": False,
+        "error": error_message,
+        "status_code": e.status_code,
+        "details": e.response_data,
+    }
+
+
+def _is_identifier_taken_error(e: OpenProjectAPIError) -> bool:
+    """Detect an OpenProject error caused by a duplicate/taken identifier."""
+    if e.status_code not in (409, 422):
+        return False
+    haystack = (e.message or "").lower()
+    validation_errors = getattr(e, "validation_errors", None)
+    if isinstance(validation_errors, dict):
+        haystack += " " + " ".join(str(k) for k in validation_errors.keys()).lower()
+    return "identifier" in haystack
 
 
 # Add health check tool for MCP
@@ -66,13 +95,24 @@ async def health_check() -> str:
 
 
 @app.tool()
-async def create_project(name: str, description: str = "") -> str:
+async def create_project(
+    name: str,
+    description: str = "",
+    parent_id: Optional[int] = None,
+    status: Optional[str] = None,
+    identifier: Optional[str] = None,
+) -> str:
     """Create a new project in OpenProject.
-    
+
     Args:
         name: Project name (required)
         description: Project description (optional)
-    
+        parent_id: ID of the parent project to nest this project under (optional)
+        status: Project status, one of on_track | off_track | at_risk |
+            not_started | finished | discontinued (optional)
+        identifier: URL-safe project identifier (optional; auto-generated from
+            name when omitted, with numeric suffixes on collision)
+
     Returns:
         JSON string with project creation result
     """
@@ -83,34 +123,132 @@ async def create_project(name: str, description: str = "") -> str:
                 "success": False,
                 "error": "Project name is required and cannot be empty"
             })
-        
-        # Create project request
-        project_request = ProjectCreateRequest(
-            name=name.strip(),
-            description=description.strip() if description else ""
+
+        # Validate status against the allowed set, if provided.
+        if status is not None:
+            try:
+                validate_project_status(status)
+            except ValueError as ve:
+                return json.dumps({"success": False, "error": str(ve)}, indent=2)
+
+        clean_name = name.strip()
+        # Use the explicit identifier if given, otherwise auto-generate.
+        user_supplied_identifier = bool(identifier and identifier.strip())
+        base_identifier = identifier.strip() if user_supplied_identifier else generate_identifier(clean_name)
+
+        # Attempt creation, auto-suffixing the identifier on collision (only
+        # when it was auto-generated). Capped to avoid an unbounded loop.
+        max_attempts = 1 if user_supplied_identifier else 10
+        last_error: Optional[OpenProjectAPIError] = None
+        for attempt in range(1, max_attempts + 1):
+            candidate = base_identifier if attempt == 1 else f"{base_identifier}-{attempt}"
+            project_request = ProjectCreateRequest(
+                name=clean_name,
+                description=description.strip() if description else "",
+                parent_id=parent_id,
+                status=status,
+                identifier=candidate,
+            )
+            try:
+                result = await openproject_client.create_project(project_request)
+                return json.dumps({
+                    "success": True,
+                    "message": f"Project '{clean_name}' created successfully",
+                    "project": {
+                        "id": result.get("id"),
+                        "name": result.get("name"),
+                        "identifier": result.get("identifier"),
+                        "description": result.get("description", {}).get("raw", ""),
+                        "status": result.get("status"),
+                        "url": f"{settings.openproject_url}/projects/{result.get('identifier', result.get('id'))}"
+                    }
+                }, indent=2)
+            except OpenProjectAPIError as e:
+                last_error = e
+                # Retry with a new suffix only on identifier collisions we own.
+                if _is_identifier_taken_error(e) and not user_supplied_identifier:
+                    continue
+                raise
+
+        # Exhausted suffix attempts.
+        payload = _format_api_error(last_error) if last_error else {
+            "success": False, "error": "Could not generate a unique identifier"
+        }
+        payload["error"] = (
+            f"Could not create project: identifier '{base_identifier}' and "
+            f"{max_attempts - 1} numeric suffixes are all taken. {payload.get('error', '')}"
         )
-        
-        # Call OpenProject API
-        result = await openproject_client.create_project(project_request)
-        
+        return json.dumps(payload, indent=2)
+
+    except OpenProjectAPIError as e:
+        return json.dumps(_format_api_error(e), indent=2)
+    except Exception as e:
+        return json.dumps({
+            "success": False,
+            "error": f"Unexpected error: {str(e)}"
+        }, indent=2)
+
+
+@app.tool()
+async def update_project(
+    project_id: int,
+    name: Optional[str] = None,
+    description: Optional[str] = None,
+    parent_id: Optional[int] = None,
+    status: Optional[str] = None,
+) -> str:
+    """Update an existing project in OpenProject (PATCH).
+
+    Only the fields you pass are changed; omitted fields stay as they are.
+
+    Args:
+        project_id: ID of the project to update (required)
+        name: New project name (optional)
+        description: New project description (optional)
+        parent_id: ID of the parent project to move this project under (optional)
+        status: New project status, one of on_track | off_track | at_risk |
+            not_started | finished | discontinued (optional)
+
+    Returns:
+        JSON string with the update result
+    """
+    try:
+        if not isinstance(project_id, int) or project_id <= 0:
+            return json.dumps({
+                "success": False,
+                "error": "project_id is required and must be a positive integer"
+            })
+
+        if status is not None:
+            try:
+                validate_project_status(status)
+            except ValueError as ve:
+                return json.dumps({"success": False, "error": str(ve)}, indent=2)
+
+        update_request = ProjectUpdateRequest(
+            name=name.strip() if name else None,
+            description=description if description is not None else None,
+            parent_id=parent_id,
+            status=status,
+        )
+
+        result = await openproject_client.update_project(project_id, update_request)
+
         return json.dumps({
             "success": True,
-            "message": f"Project '{name}' created successfully",
+            "message": f"Project {project_id} updated successfully",
             "project": {
                 "id": result.get("id"),
                 "name": result.get("name"),
+                "identifier": result.get("identifier"),
                 "description": result.get("description", {}).get("raw", ""),
                 "status": result.get("status"),
                 "url": f"{settings.openproject_url}/projects/{result.get('identifier', result.get('id'))}"
             }
         }, indent=2)
-        
+
     except OpenProjectAPIError as e:
-        return json.dumps({
-            "success": False,
-            "error": f"OpenProject API error: {e.message}",
-            "details": e.response_data
-        }, indent=2)
+        return json.dumps(_format_api_error(e), indent=2)
     except Exception as e:
         return json.dumps({
             "success": False,

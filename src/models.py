@@ -50,7 +50,17 @@ class ProjectCreateRequest(BaseModel):
     """Request model for creating a project."""
     name: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = ""
-    status: Optional[str] = "active"
+    parent_id: Optional[int] = None
+    status: Optional[str] = None
+    identifier: Optional[str] = None
+
+
+class ProjectUpdateRequest(BaseModel):
+    """Request model for updating a project (all fields optional)."""
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    description: Optional[str] = None
+    parent_id: Optional[int] = None
+    status: Optional[str] = None
 
 
 class WorkPackageCreateRequest(BaseModel):

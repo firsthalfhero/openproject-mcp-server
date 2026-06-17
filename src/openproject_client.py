@@ -5,7 +5,7 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta
 import httpx
 from config import settings
-from models import Project, WorkPackage, ProjectCreateRequest, WorkPackageCreateRequest
+from models import Project, WorkPackage, ProjectCreateRequest, ProjectUpdateRequest, WorkPackageCreateRequest
 from utils.logging import get_logger, log_api_request, log_api_response, log_error
 
 logger = get_logger(__name__)
@@ -132,19 +132,51 @@ class OpenProjectClient:
         return response.get("_embedded", {}).get("elements", [])
     
     async def create_project(self, project_data: ProjectCreateRequest) -> Dict[str, Any]:
-        """Create a new project."""
+        """Create a new project.
+
+        Parent and status are set via HAL _links (parent.href / status.href),
+        as required by the OpenProject API v3.
+        """
         payload = {
             "name": project_data.name,
             "description": {
                 "raw": project_data.description
             }
         }
-        
-        # Only add status if it's not the default
-        if project_data.status and project_data.status != "active":
-            payload["status"] = project_data.status
-        
+
+        if project_data.identifier:
+            payload["identifier"] = project_data.identifier
+
+        links = {}
+        if project_data.parent_id:
+            links["parent"] = {"href": f"/api/v3/projects/{project_data.parent_id}"}
+        if project_data.status:
+            links["status"] = {"href": f"/api/v3/project_statuses/{project_data.status}"}
+        if links:
+            payload["_links"] = links
+
         return await self._make_request("POST", "/projects", json=payload)
+
+    async def update_project(
+        self, project_id: int, update_data: ProjectUpdateRequest
+    ) -> Dict[str, Any]:
+        """Update an existing project. Only provided fields are sent (PATCH)."""
+        payload: Dict[str, Any] = {}
+
+        if update_data.name is not None:
+            payload["name"] = update_data.name
+        if update_data.description is not None:
+            payload["description"] = {"raw": update_data.description}
+
+        links = {}
+        if update_data.parent_id is not None:
+            links["parent"] = {"href": f"/api/v3/projects/{update_data.parent_id}"}
+        if update_data.status is not None:
+            links["status"] = {"href": f"/api/v3/project_statuses/{update_data.status}"}
+        if links:
+            payload["_links"] = links
+
+        return await self._make_request("PATCH", f"/projects/{project_id}", json=payload)
     
     async def get_work_packages(self, project_id: int, use_pagination: bool = False) -> List[Dict[str, Any]]:
         """Get work packages for a project."""
